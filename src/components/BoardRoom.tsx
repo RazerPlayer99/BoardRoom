@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useChatStore } from "@/lib/chatStore";
+import { runTurn } from "@/lib/engine/turnRunner";
+import type { AgentConfig } from "@/types/agent";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import AgentStatus from "./AgentStatus";
@@ -20,10 +22,28 @@ export default function BoardRoom() {
     });
   }, [messages]);
 
-  const handleSend = (content: string, _pingAgentId?: string) => {
-    // Step 1: just add CEO message. No agent responses yet (Step 2+).
-    addCeoMessage(content);
-  };
+  const handleSend = useCallback(
+    async (content: string, pingAgentId?: string) => {
+      addCeoMessage(content);
+
+      // Kick off the turn — agents respond sequentially
+      await runTurn(
+        {
+          getMessages: () => useChatStore.getState().messages,
+          setThinking: (agent: AgentConfig) =>
+            useChatStore
+              .getState()
+              .setThinking(agent.id, agent.name, agent.avatar, agent.color),
+          resolveThinking: (agentId: string, response: string) =>
+            useChatStore.getState().resolveThinking(agentId, response),
+          setProcessing: (v: boolean) =>
+            useChatStore.getState().setProcessing(v),
+        },
+        pingAgentId
+      );
+    },
+    [addCeoMessage]
+  );
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
@@ -40,8 +60,15 @@ export default function BoardRoom() {
             </p>
           </div>
         </div>
-        <div className="text-xs text-zinc-600">
-          Step 1 — Chat Shell
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-zinc-600">
+            {isProcessing ? "Agents discussing…" : "Awaiting CEO input"}
+          </span>
+          <div
+            className={`w-2 h-2 rounded-full ${
+              isProcessing ? "bg-amber-500 animate-pulse" : "bg-emerald-500"
+            }`}
+          />
         </div>
       </header>
 
@@ -62,6 +89,10 @@ export default function BoardRoom() {
             <p className="text-sm text-zinc-500 max-w-md">
               You are the CEO. Set the agenda, ask a strategic question, or
               propose an idea. Your executive team will respond.
+            </p>
+            <p className="text-xs text-zinc-600 mt-3 max-w-sm">
+              Tip: Use the ping buttons to direct a specific agent, or let all
+              three respond in order (Research → Engineering → Product).
             </p>
           </div>
         )}
