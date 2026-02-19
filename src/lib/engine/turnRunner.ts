@@ -1,6 +1,6 @@
 import type { AgentConfig } from "@/types/agent";
-import type { ChatMessage } from "@/types/chat";
-import { DEFAULT_TURN_ORDER, getAgentById } from "@/lib/agents";
+import type { ChatMessage, TurnMode } from "@/types/chat";
+import { DEFAULT_TURN_ORDER, AGENTS, getAgentById } from "@/lib/agents";
 import { generateMockResponse } from "./mockResponses";
 
 function sleep(ms: number): Promise<void> {
@@ -8,29 +8,48 @@ function sleep(ms: number): Promise<void> {
 }
 
 export interface TurnCallbacks {
-  /** Get current messages snapshot */
   getMessages: () => ChatMessage[];
-  /** Show "Thinking…" for this agent */
   setThinking: (agent: AgentConfig) => void;
-  /** Append a streaming text chunk to the thinking message */
   appendToThinking: (agentId: string, chunk: string) => void;
-  /** Replace "Thinking…" with actual response (used for mock fallback) */
   resolveThinking: (agentId: string, content: string) => void;
-  /** Mark turn processing as started/finished */
   setProcessing: (v: boolean) => void;
+  advanceRoundRobin: () => void;
+}
+
+export interface TurnOptions {
+  turnMode: TurnMode;
+  roundRobinIndex: number;
+  pingAgentId?: string;
 }
 
 /**
- * Resolves the ordered list of agents to invoke this turn.
+ * Resolve which agents respond this turn based on mode + optional ping.
  */
-function resolveAgentOrder(pingAgentId?: string): AgentConfig[] {
+function resolveAgentOrder(options: TurnOptions): AgentConfig[] {
+  const { turnMode, roundRobinIndex, pingAgentId } = options;
+
+  // Ping always overrides in any mode
   if (pingAgentId) {
     const agent = getAgentById(pingAgentId);
     return agent ? [agent] : [];
   }
-  return DEFAULT_TURN_ORDER.map((id) => getAgentById(id)).filter(
-    (a): a is AgentConfig => a !== undefined
-  );
+
+  switch (turnMode) {
+    case "round-robin": {
+      const agent = AGENTS[roundRobinIndex % AGENTS.length];
+      return agent ? [agent] : [];
+    }
+
+    case "ceo-picks":
+      // No ping was provided — return empty so BoardRoom can show a hint
+      return [];
+
+    case "default-order":
+    default:
+      return DEFAULT_TURN_ORDER.map((id) => getAgentById(id)).filter(
+        (a): a is AgentConfig => a !== undefined
+      );
+  }
 }
 
 /**
@@ -54,11 +73,9 @@ async function streamFromApi(
       }),
     });
 
-    // If the API signals a fallback (missing key, provider error), use mocks
     if (!res.ok) {
       const body = await res.json().catch(() => null);
       if (body?.fallback) return false;
-      // Unexpected error — still fall back gracefully
       return false;
     }
 
@@ -76,7 +93,6 @@ async function streamFromApi(
       callbacks.appendToThinking(agent.id, chunk);
     }
 
-    // Finalize — set the final id and clear activeAgent
     callbacks.resolveThinking(agent.id, fullText);
     return true;
   } catch {
@@ -85,15 +101,21 @@ async function streamFromApi(
 }
 
 /**
- * Run a full turn: sequence through agents one at a time.
- * Tries real API streaming first, falls back to mock responses.
+ * Run a full turn: resolve agents based on mode, call API or fall back to mocks.
+ * Returns "no-ping" if ceo-picks mode with no agent selected (caller should show hint).
  */
 export async function runTurn(
   callbacks: TurnCallbacks,
-  pingAgentId?: string
-): Promise<void> {
-  const agents = resolveAgentOrder(pingAgentId);
-  if (agents.length === 0) return;
+  options: TurnOptions
+): Promise<"ok" | "no-ping"> {
+  const agents = resolveAgentOrder(options);
+
+  if (agents.length === 0) {
+    if (options.turnMode === "ceo-picks" && !options.pingAgentId) {
+      return "no-ping";
+    }
+    return "ok";
+  }
 
   callbacks.setProcessing(true);
 
@@ -104,18 +126,22 @@ export async function runTurn(
     const streamed = await streamFromApi(agent, messages, callbacks);
 
     if (!streamed) {
-      // Fallback: simulate a delay then use mock response
       await sleep(1200 + Math.random() * 1600);
       const mockMessages = callbacks.getMessages();
       const response = generateMockResponse(agent, mockMessages);
       callbacks.resolveThinking(agent.id, response);
     }
 
-    // Small gap between agents
     if (agent !== agents[agents.length - 1]) {
       await sleep(400);
     }
   }
 
+  // Advance round-robin pointer after the turn completes
+  if (options.turnMode === "round-robin" && !options.pingAgentId) {
+    callbacks.advanceRoundRobin();
+  }
+
   callbacks.setProcessing(false);
+  return "ok";
 }

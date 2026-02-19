@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ChatMessage, TurnMode } from "@/types/chat";
-import { CEO_AGENT } from "./agents";
+import { CEO_AGENT, AGENTS } from "./agents";
 
 let messageCounter = 0;
 function nextId(): string {
@@ -12,6 +12,7 @@ interface ChatState {
   turnMode: TurnMode;
   activeAgentId: string | null; // who is currently "thinking"
   isProcessing: boolean; // is a turn in progress
+  roundRobinIndex: number; // tracks next agent for round-robin mode
 
   // Actions
   addCeoMessage: (content: string) => void;
@@ -21,6 +22,7 @@ interface ChatState {
   resolveThinking: (agentId: string, content: string) => void;
   setTurnMode: (mode: TurnMode) => void;
   setProcessing: (v: boolean) => void;
+  advanceRoundRobin: () => void;
   reset: () => void;
 }
 
@@ -29,6 +31,7 @@ export const useChatStore = create<ChatState>((set) => ({
   turnMode: "default-order",
   activeAgentId: null,
   isProcessing: false,
+  roundRobinIndex: 0,
 
   addCeoMessage: (content) =>
     set((state) => ({
@@ -102,13 +105,18 @@ export const useChatStore = create<ChatState>((set) => ({
       ),
     })),
 
-  setTurnMode: (mode) => set({ turnMode: mode }),
+  setTurnMode: (mode) => set({ turnMode: mode, roundRobinIndex: 0 }),
   setProcessing: (v) => set({ isProcessing: v }),
+  advanceRoundRobin: () =>
+    set((state) => ({
+      roundRobinIndex: (state.roundRobinIndex + 1) % AGENTS.length,
+    })),
   reset: () =>
     set({
       messages: [],
       activeAgentId: null,
       isProcessing: false,
       turnMode: "default-order",
+      roundRobinIndex: 0,
     }),
 }));
