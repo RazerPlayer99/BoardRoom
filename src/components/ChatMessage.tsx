@@ -8,6 +8,7 @@ interface Props {
 
 export default function ChatMessage({ message }: Props) {
   const isCeo = message.role === "ceo";
+  const isThinkingDots = message.isThinking && message.content.length === 0;
 
   return (
     <div className={`flex gap-3 ${isCeo ? "flex-row-reverse" : "flex-row"}`}>
@@ -40,7 +41,7 @@ export default function ChatMessage({ message }: Props) {
               : "bg-zinc-800 text-zinc-100 rounded-tl-sm"
           }`}
         >
-          {message.isThinking ? (
+          {isThinkingDots ? (
             <div className="flex items-center gap-1.5">
               <span className="text-zinc-400">Thinking</span>
               <span className="flex gap-0.5">
