@@ -3,17 +3,6 @@ import type { ChatMessage } from "@/types/chat";
 import { DEFAULT_TURN_ORDER, getAgentById } from "@/lib/agents";
 import { generateMockResponse } from "./mockResponses";
 
-/** Simulated thinking delay (ms) — gives a natural pacing feel */
-const THINKING_DELAY_MIN = 1200;
-const THINKING_DELAY_MAX = 2800;
-
-function randomDelay(): number {
-  return (
-    THINKING_DELAY_MIN +
-    Math.random() * (THINKING_DELAY_MAX - THINKING_DELAY_MIN)
-  );
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -23,7 +12,9 @@ export interface TurnCallbacks {
   getMessages: () => ChatMessage[];
   /** Show "Thinking…" for this agent */
   setThinking: (agent: AgentConfig) => void;
-  /** Replace "Thinking…" with actual response */
+  /** Append a streaming text chunk to the thinking message */
+  appendToThinking: (agentId: string, chunk: string) => void;
+  /** Replace "Thinking…" with actual response (used for mock fallback) */
   resolveThinking: (agentId: string, content: string) => void;
   /** Mark turn processing as started/finished */
   setProcessing: (v: boolean) => void;
@@ -31,8 +22,6 @@ export interface TurnCallbacks {
 
 /**
  * Resolves the ordered list of agents to invoke this turn.
- * - If pingAgentId is set, only that agent responds.
- * - Otherwise, uses the default order: Research → Engineering → Product.
  */
 function resolveAgentOrder(pingAgentId?: string): AgentConfig[] {
   if (pingAgentId) {
@@ -45,10 +34,59 @@ function resolveAgentOrder(pingAgentId?: string): AgentConfig[] {
 }
 
 /**
+ * Call /api/respond and stream the result back.
+ * Returns true if successful, false if we should fall back to mock.
+ */
+async function streamFromApi(
+  agent: AgentConfig,
+  messages: ChatMessage[],
+  callbacks: TurnCallbacks
+): Promise<boolean> {
+  try {
+    const res = await fetch("/api/respond", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: agent.provider,
+        model: agent.model,
+        systemPrompt: agent.systemPrompt,
+        messages,
+      }),
+    });
+
+    // If the API signals a fallback (missing key, provider error), use mocks
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      if (body?.fallback) return false;
+      // Unexpected error — still fall back gracefully
+      return false;
+    }
+
+    if (!res.body) return false;
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      fullText += chunk;
+      callbacks.appendToThinking(agent.id, chunk);
+    }
+
+    // Finalize — set the final id and clear activeAgent
+    callbacks.resolveThinking(agent.id, fullText);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Run a full turn: sequence through agents one at a time.
- * Each agent sees the "Thinking…" state, then its mock response replaces it.
- *
- * In Step 3, the mock response will be swapped for a real API call.
+ * Tries real API streaming first, falls back to mock responses.
  */
 export async function runTurn(
   callbacks: TurnCallbacks,
@@ -60,20 +98,20 @@ export async function runTurn(
   callbacks.setProcessing(true);
 
   for (const agent of agents) {
-    // Show thinking indicator
     callbacks.setThinking(agent);
 
-    // Simulate thinking time
-    await sleep(randomDelay());
-
-    // Generate mock response using current conversation state
     const messages = callbacks.getMessages();
-    const response = generateMockResponse(agent, messages);
+    const streamed = await streamFromApi(agent, messages, callbacks);
 
-    // Replace thinking with actual response
-    callbacks.resolveThinking(agent.id, response);
+    if (!streamed) {
+      // Fallback: simulate a delay then use mock response
+      await sleep(1200 + Math.random() * 1600);
+      const mockMessages = callbacks.getMessages();
+      const response = generateMockResponse(agent, mockMessages);
+      callbacks.resolveThinking(agent.id, response);
+    }
 
-    // Small gap between agents for natural pacing
+    // Small gap between agents
     if (agent !== agents[agents.length - 1]) {
       await sleep(400);
     }

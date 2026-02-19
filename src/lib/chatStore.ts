@@ -17,6 +17,7 @@ interface ChatState {
   addCeoMessage: (content: string) => void;
   addAgentMessage: (agentId: string, agentName: string, avatar: string, color: string, content: string) => void;
   setThinking: (agentId: string, agentName: string, avatar: string, color: string) => void;
+  appendToThinking: (agentId: string, chunk: string) => void;
   resolveThinking: (agentId: string, content: string) => void;
   setTurnMode: (mode: TurnMode) => void;
   setProcessing: (v: boolean) => void;
@@ -80,6 +81,15 @@ export const useChatStore = create<ChatState>((set) => ({
           isThinking: true,
         },
       ],
+    })),
+
+  appendToThinking: (agentId, chunk) =>
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === `thinking-${agentId}`
+          ? { ...m, content: m.content + chunk, isThinking: false }
+          : m
+      ),
     })),
 
   resolveThinking: (agentId, content) =>

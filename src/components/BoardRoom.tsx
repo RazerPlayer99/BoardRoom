@@ -34,6 +34,8 @@ export default function BoardRoom() {
             useChatStore
               .getState()
               .setThinking(agent.id, agent.name, agent.avatar, agent.color),
+          appendToThinking: (agentId: string, chunk: string) =>
+            useChatStore.getState().appendToThinking(agentId, chunk),
           resolveThinking: (agentId: string, response: string) =>
             useChatStore.getState().resolveThinking(agentId, response),
           setProcessing: (v: boolean) =>
